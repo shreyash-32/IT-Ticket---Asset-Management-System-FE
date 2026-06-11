@@ -1,6 +1,7 @@
-import React from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { useNavigate, useLocation, Link } from 'react-router-dom';
 import { authService } from '../services/authService';
+import dashboardService, { teamLeadService } from '../services/dashboardService';
 import { 
   LogOut, 
   User, 
@@ -16,10 +17,27 @@ import {
   Briefcase 
 } from 'lucide-react';
 
+// Employee-specific components
+import SummaryCards from '../components/employee/SummaryCards';
+import MyTicketsTable from '../components/employee/MyTicketsTable';
+import TicketDetailModal from '../components/employee/TicketDetailModal';
+import RaiseTicketModal from '../components/employee/RaiseTicketModal';
+import MyAssetsPanel from '../components/employee/MyAssetsPanel';
+import EmployeeProfileCard from '../components/employee/EmployeeProfileCard';
+import Toast from '../components/Toast';
+
+// Team Lead-specific components
+import TeamLeadSummaryCards from '../components/teamlead/TeamLeadSummaryCards';
+import AllTicketsTable from '../components/teamlead/AllTicketsTable';
+import AssignTicketModal from '../components/teamlead/AssignTicketModal';
+import EscalateTicketModal from '../components/teamlead/EscalateTicketModal';
+import TeamWorkloadPanel from '../components/teamlead/TeamWorkloadPanel';
+import SLACompliancePanel from '../components/teamlead/SLACompliancePanel';
+
 /**
  * Shared layout wrapper for dashboards
  */
-const DashboardLayout = ({ children, title, roleBadgeColor }) => {
+const DashboardLayout = ({ children, title, roleBadgeColor, activeSection, onSectionChange }) => {
   const navigate = useNavigate();
   const user = authService.getCurrentUser() || { name: 'User', email: 'user@company.com', role: 'Employee' };
 
@@ -27,6 +45,19 @@ const DashboardLayout = ({ children, title, roleBadgeColor }) => {
     authService.logout();
     navigate('/login');
   };
+
+  // Sidebar navigation items
+  const navItems = [
+    { id: 'overview', label: 'Dashboard', icon: Activity },
+    { id: 'tickets', label: 'Tickets', icon: Ticket },
+    { id: 'assets', label: 'Assets', icon: Laptop },
+    { id: 'profile', label: 'Profile', icon: User },
+  ];
+
+  // Admin-only items
+  if (user.role === 'Administrator') {
+    navItems.push({ id: 'settings', label: 'Settings', icon: Settings });
+  }
 
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex flex-col md:flex-row transition-colors duration-300">
@@ -45,24 +76,24 @@ const DashboardLayout = ({ children, title, roleBadgeColor }) => {
           </div>
 
           <nav className="space-y-1">
-            <a href="#" className="flex items-center gap-3 px-4 py-2.5 rounded-lg bg-slate-800 text-white font-medium text-sm transition-all">
-              <Activity size={18} />
-              <span>Dashboard</span>
-            </a>
-            <a href="#" className="flex items-center gap-3 px-4 py-2.5 rounded-lg text-slate-400 hover:bg-slate-800 hover:text-white font-medium text-sm transition-all">
-              <Ticket size={18} />
-              <span>Tickets</span>
-            </a>
-            <a href="#" className="flex items-center gap-3 px-4 py-2.5 rounded-lg text-slate-400 hover:bg-slate-800 hover:text-white font-medium text-sm transition-all">
-              <Laptop size={18} />
-              <span>Assets</span>
-            </a>
-            {user.role === 'Administrator' && (
-              <a href="#" className="flex items-center gap-3 px-4 py-2.5 rounded-lg text-slate-400 hover:bg-slate-800 hover:text-white font-medium text-sm transition-all">
-                <Settings size={18} />
-                <span>Settings</span>
-              </a>
-            )}
+            {navItems.map((item) => {
+              const Icon = item.icon;
+              const isActive = activeSection === item.id;
+              return (
+                <button
+                  key={item.id}
+                  onClick={() => onSectionChange?.(item.id)}
+                  className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-lg font-medium text-sm transition-all ${
+                    isActive
+                      ? 'bg-slate-800 text-white'
+                      : 'text-slate-400 hover:bg-slate-800 hover:text-white'
+                  }`}
+                >
+                  <Icon size={18} />
+                  <span>{item.label}</span>
+                </button>
+              );
+            })}
           </nav>
         </div>
 
@@ -113,61 +144,213 @@ const DashboardLayout = ({ children, title, roleBadgeColor }) => {
   );
 };
 
-/* 1. Employee Dashboard */
+/* 1. Employee Dashboard — fully wired to the API */
 export const EmployeeDashboard = () => {
-  return (
-    <DashboardLayout title="Employee Portal" roleBadgeColor="bg-green-100 text-green-700 dark:bg-green-950/30 dark:text-green-400">
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-        <div className="bg-white dark:bg-slate-900 p-6 rounded-xl border border-slate-200/50 dark:border-slate-800/60 shadow-sm">
-          <div className="text-slate-400 dark:text-slate-500 mb-2 font-bold text-xs uppercase tracking-wider">My Open Tickets</div>
-          <div className="text-3xl font-extrabold text-slate-800 dark:text-white">2</div>
-        </div>
-        <div className="bg-white dark:bg-slate-900 p-6 rounded-xl border border-slate-200/50 dark:border-slate-800/60 shadow-sm">
-          <div className="text-slate-400 dark:text-slate-500 mb-2 font-bold text-xs uppercase tracking-wider">Assigned Hardware</div>
-          <div className="text-3xl font-extrabold text-slate-800 dark:text-white">3 Assets</div>
-        </div>
-        <div className="bg-white dark:bg-slate-900 p-6 rounded-xl border border-slate-200/50 dark:border-slate-800/60 shadow-sm">
-          <div className="text-slate-400 dark:text-slate-500 mb-2 font-bold text-xs uppercase tracking-wider">Pending Orders</div>
-          <div className="text-3xl font-extrabold text-slate-800 dark:text-white">0</div>
-        </div>
-      </div>
+  const [section, setSection] = useState('overview');
+  const [summary, setSummary] = useState(null);
+  const [tickets, setTickets] = useState([]);
+  const [totalTicketCount, setTotalTicketCount] = useState(0);
+  const [ticketPage, setTicketPage] = useState(1);
+  const [ticketStatus, setTicketStatus] = useState(null);
+  const [assets, setAssets] = useState([]);
+  const [profile, setProfile] = useState(null);
 
-      <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200/50 dark:border-slate-800/60 p-6 shadow-sm">
-        <div className="flex justify-between items-center mb-6">
-          <h3 className="font-heading font-bold text-lg text-slate-800 dark:text-white">My Support Tickets</h3>
-          <button className="flex items-center gap-1.5 text-xs font-bold text-white bg-blue-600 dark:bg-blue-500 hover:bg-blue-700 py-1.5 px-3 rounded-lg transition-all">
-            <PlusCircle size={14} /> Create Request
-          </button>
-        </div>
-        <div className="space-y-4">
-          <div className="flex justify-between items-center py-3 border-b border-slate-100 dark:border-slate-800">
-            <div>
-              <p className="font-semibold text-sm text-slate-800 dark:text-slate-200">Laptop Keyboard replacement</p>
-              <span className="text-xs text-slate-400">Created 2 days ago &bull; Ticket ID: #T-982</span>
+  const [loadingSummary, setLoadingSummary] = useState(true);
+  const [loadingTickets, setLoadingTickets] = useState(true);
+  const [loadingAssets, setLoadingAssets] = useState(true);
+  const [loadingProfile, setLoadingProfile] = useState(true);
+
+  const [selectedTicketId, setSelectedTicketId] = useState(null);
+  const [showRaiseTicket, setShowRaiseTicket] = useState(false);
+  const [toast, setToast] = useState(null);
+
+  const PAGE_SIZE = 10;
+
+  // Fetch summary
+  useEffect(() => {
+    const load = async () => {
+      setLoadingSummary(true);
+      try {
+        const res = await dashboardService.getSummary();
+        setSummary(res.data.data);
+      } catch (e) {
+        console.error('Failed to load summary', e);
+      } finally {
+        setLoadingSummary(false);
+      }
+    };
+    load();
+  }, []);
+
+  // Fetch tickets when status or page changes
+  const loadTickets = useCallback(async () => {
+    setLoadingTickets(true);
+    try {
+      const res = await dashboardService.getTickets(ticketStatus, ticketPage, PAGE_SIZE);
+      const data = res.data.data;
+      setTickets(data.items || data.tickets || []);
+      setTotalTicketCount(data.totalCount || 0);
+    } catch (e) {
+      console.error('Failed to load tickets', e);
+    } finally {
+      setLoadingTickets(false);
+    }
+  }, [ticketStatus, ticketPage]);
+
+  useEffect(() => {
+    loadTickets();
+  }, [loadTickets]);
+
+  // Fetch assets
+  useEffect(() => {
+    if (section !== 'assets' && section !== 'overview') return;
+    const load = async () => {
+      setLoadingAssets(true);
+      try {
+        const res = await dashboardService.getAssets();
+        setAssets(res.data.data || []);
+      } catch (e) {
+        console.error('Failed to load assets', e);
+      } finally {
+        setLoadingAssets(false);
+      }
+    };
+    load();
+  }, [section]);
+
+  // Fetch profile
+  useEffect(() => {
+    if (section !== 'profile') return;
+    const load = async () => {
+      setLoadingProfile(true);
+      try {
+        const res = await dashboardService.getProfile();
+        setProfile(res.data.data);
+      } catch (e) {
+        console.error('Failed to load profile', e);
+      } finally {
+        setLoadingProfile(false);
+      }
+    };
+    load();
+  }, [section]);
+
+  const handleStatusChange = (status) => {
+    setTicketStatus(status);
+    setTicketPage(1);
+  };
+
+  const handleTicketCreated = (ticket) => {
+    setToast({ message: `Ticket ${ticket?.number || ''} created successfully!`, variant: 'success' });
+    loadTickets();
+    // Refresh summary
+    dashboardService.getSummary().then((res) => setSummary(res.data.data)).catch(() => {});
+  };
+
+  // Section content mapping
+  const renderContent = () => {
+    switch (section) {
+      case 'overview':
+        return (
+          <>
+            <SummaryCards data={summary} loading={loadingSummary} />
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-heading font-bold text-lg text-slate-800 dark:text-white">My Support Tickets</h3>
+              <button
+                onClick={() => setShowRaiseTicket(true)}
+                className="flex items-center gap-1.5 text-xs font-bold text-white bg-blue-600 dark:bg-blue-500 hover:bg-blue-700 py-1.5 px-3 rounded-lg transition-all"
+              >
+                <PlusCircle size={14} /> Create Request
+              </button>
             </div>
-            <span className="px-2 py-0.5 rounded bg-amber-100 text-amber-700 dark:bg-amber-950/20 dark:text-amber-400 text-xs font-semibold">
-              In Progress
-            </span>
-          </div>
-          <div className="flex justify-between items-center py-3">
-            <div>
-              <p className="font-semibold text-sm text-slate-800 dark:text-slate-200">Unable to access VPN</p>
-              <span className="text-xs text-slate-400">Created 4 days ago &bull; Ticket ID: #T-971</span>
+            <MyTicketsTable
+              tickets={tickets}
+              totalCount={totalTicketCount}
+              pageNumber={ticketPage}
+              pageSize={PAGE_SIZE}
+              activeStatus={ticketStatus}
+              onStatusChange={handleStatusChange}
+              onPageChange={setTicketPage}
+              onTicketClick={setSelectedTicketId}
+              loading={loadingTickets}
+            />
+          </>
+        );
+      case 'tickets':
+        return (
+          <>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-heading font-bold text-lg text-slate-800 dark:text-white">All My Tickets</h3>
+              <button
+                onClick={() => setShowRaiseTicket(true)}
+                className="flex items-center gap-1.5 text-xs font-bold text-white bg-blue-600 dark:bg-blue-500 hover:bg-blue-700 py-1.5 px-3 rounded-lg transition-all"
+              >
+                <PlusCircle size={14} /> Create Request
+              </button>
             </div>
-            <span className="px-2 py-0.5 rounded bg-blue-100 text-blue-700 dark:bg-blue-950/20 dark:text-blue-400 text-xs font-semibold">
-              Assigned
-            </span>
-          </div>
-        </div>
-      </div>
+            <MyTicketsTable
+              tickets={tickets}
+              totalCount={totalTicketCount}
+              pageNumber={ticketPage}
+              pageSize={PAGE_SIZE}
+              activeStatus={ticketStatus}
+              onStatusChange={handleStatusChange}
+              onPageChange={setTicketPage}
+              onTicketClick={setSelectedTicketId}
+              loading={loadingTickets}
+            />
+          </>
+        );
+      case 'assets':
+        return <MyAssetsPanel assets={assets} loading={loadingAssets} />;
+      case 'profile':
+        return <EmployeeProfileCard profile={profile} loading={loadingProfile} />;
+      default:
+        return null;
+    }
+  };
+
+  return (
+    <DashboardLayout
+      title="Employee Portal"
+      roleBadgeColor="bg-green-100 text-green-700 dark:bg-green-950/30 dark:text-green-400"
+      activeSection={section}
+      onSectionChange={setSection}
+    >
+      {renderContent()}
+
+      {/* Modals */}
+      {selectedTicketId && (
+        <TicketDetailModal
+          ticketId={selectedTicketId}
+          onClose={() => setSelectedTicketId(null)}
+          onFeedbackSubmitted={() => loadTickets()}
+        />
+      )}
+      {showRaiseTicket && (
+        <RaiseTicketModal
+          onClose={() => setShowRaiseTicket(false)}
+          onTicketCreated={handleTicketCreated}
+        />
+      )}
+
+      {/* Toast notification */}
+      {toast && (
+        <Toast
+          message={toast.message}
+          variant={toast.variant}
+          onClose={() => setToast(null)}
+        />
+      )}
     </DashboardLayout>
   );
 };
 
 /* 2. IT Support Engineer Dashboard */
 export const SupportDashboard = () => {
+  const [section, setSection] = useState('overview');
   return (
-    <DashboardLayout title="Support Queue Console" roleBadgeColor="bg-blue-100 text-blue-700 dark:bg-blue-950/30 dark:text-blue-400">
+    <DashboardLayout title="Support Queue Console" roleBadgeColor="bg-blue-100 text-blue-700 dark:bg-blue-950/30 dark:text-blue-400" activeSection={section} onSectionChange={setSection}>
       <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
         <div className="bg-white dark:bg-slate-900 p-6 rounded-xl border border-slate-200/50 dark:border-slate-800/60 shadow-sm">
           <div className="text-slate-400 dark:text-slate-500 mb-2 font-bold text-xs uppercase tracking-wider">Unassigned Queue</div>
@@ -212,50 +395,338 @@ export const SupportDashboard = () => {
       </div>
     </DashboardLayout>
   );
-};
+};/* 3. Team Lead Dashboard */
+export const TeamLeadDashboard = ({ 
+  title = "Team Operations Overview", 
+  roleBadgeColor = "bg-purple-100 text-purple-700 dark:bg-purple-950/30 dark:text-purple-400" 
+}) => {
+  const [section, setSection] = useState('overview');
+  const [summary, setSummary] = useState(null);
+  const [tickets, setTickets] = useState([]);
+  const [totalTicketCount, setTotalTicketCount] = useState(0);
+  const [ticketPage, setTicketPage] = useState(1);
+  const [ticketStatus, setTicketStatus] = useState(null);
+  const [ticketPriority, setTicketPriority] = useState(null);
+  const [ticketAssignedTo, setTicketAssignedTo] = useState(null);
+  const [engineers, setEngineers] = useState([]);
+  const [workload, setWorkload] = useState([]);
+  const [slaData, setSlaData] = useState([]);
+  const [assets, setAssets] = useState([]);
+  const [profile, setProfile] = useState(null);
 
-/* 3. Team Lead Dashboard */
-export const TeamLeadDashboard = () => {
+  const [loadingSummary, setLoadingSummary] = useState(true);
+  const [loadingTickets, setLoadingTickets] = useState(true);
+  const [loadingWorkload, setLoadingWorkload] = useState(true);
+  const [loadingSLA, setLoadingSLA] = useState(true);
+  const [loadingEngineers, setLoadingEngineers] = useState(true);
+  const [loadingAssets, setLoadingAssets] = useState(true);
+  const [loadingProfile, setLoadingProfile] = useState(true);
+
+  const [selectedTicketId, setSelectedTicketId] = useState(null);
+  const [assigningTicket, setAssigningTicket] = useState(null);
+  const [escalatingTicket, setEscalatingTicket] = useState(null);
+  const [toast, setToast] = useState(null);
+
+  const PAGE_SIZE = 10;
+  const isInitialMount = useRef(true);
+
+  const loadTickets = useCallback(async () => {
+    setLoadingTickets(true);
+    try {
+      const res = await teamLeadService.getTickets({
+        status: ticketStatus || undefined,
+        priority: ticketPriority || undefined,
+        assignedTo: ticketAssignedTo || undefined,
+        pageNumber: ticketPage,
+        pageSize: PAGE_SIZE
+      });
+      const data = res.data.data;
+      setTickets(data.items || []);
+      setTotalTicketCount(data.totalCount || 0);
+    } catch (e) {
+      console.error('Failed to load tickets', e);
+      setToast({ message: 'Failed to load tickets queue.', variant: 'error' });
+    } finally {
+      setLoadingTickets(false);
+    }
+  }, [ticketStatus, ticketPriority, ticketAssignedTo, ticketPage]);
+
+  const refreshMetrics = useCallback(async () => {
+    try {
+      const [summaryRes, workloadRes, slaRes] = await Promise.all([
+        teamLeadService.getSummary(),
+        teamLeadService.getWorkload(),
+        teamLeadService.getSLA()
+      ]);
+      setSummary(summaryRes.data.data);
+      setWorkload(workloadRes.data.data || []);
+      setSlaData(slaRes.data.data || []);
+    } catch (e) {
+      console.error('Failed to refresh metrics', e);
+    }
+  }, []);
+
+  // Parallel load on mount
+  useEffect(() => {
+    const loadAllData = async () => {
+      setLoadingSummary(true);
+      setLoadingTickets(true);
+      setLoadingWorkload(true);
+      setLoadingSLA(true);
+      setLoadingEngineers(true);
+
+      try {
+        const [summaryRes, ticketsRes, workloadRes, slaRes, engineersRes] = await Promise.all([
+          teamLeadService.getSummary(),
+          teamLeadService.getTickets({
+            status: ticketStatus || undefined,
+            priority: ticketPriority || undefined,
+            assignedTo: ticketAssignedTo || undefined,
+            pageNumber: ticketPage,
+            pageSize: PAGE_SIZE
+          }),
+          teamLeadService.getWorkload(),
+          teamLeadService.getSLA(),
+          teamLeadService.getEngineers()
+        ]);
+
+        setSummary(summaryRes.data.data);
+        const data = ticketsRes.data.data;
+        setTickets(data.items || []);
+        setTotalTicketCount(data.totalCount || 0);
+        setWorkload(workloadRes.data.data || []);
+        setSlaData(slaRes.data.data || []);
+        setEngineers(engineersRes.data.data || []);
+      } catch (err) {
+        console.error("Failed to load initial data", err);
+        setToast({ message: "Failed to load dashboard metrics.", variant: "error" });
+      } finally {
+        setLoadingSummary(false);
+        setLoadingTickets(false);
+        setLoadingWorkload(false);
+        setLoadingSLA(false);
+        setLoadingEngineers(false);
+      }
+    };
+
+    loadAllData();
+  }, []);
+
+  // Filter and pagination effect (skip initial mount)
+  useEffect(() => {
+    if (isInitialMount.current) {
+      isInitialMount.current = false;
+      return;
+    }
+    loadTickets();
+  }, [loadTickets]);
+
+  // Load personal assets
+  useEffect(() => {
+    if (section !== 'assets' && section !== 'overview') return;
+    const load = async () => {
+      setLoadingAssets(true);
+      try {
+        const res = await dashboardService.getAssets();
+        setAssets(res.data.data || []);
+      } catch (e) {
+        console.error('Failed to load assets', e);
+      } finally {
+        setLoadingAssets(false);
+      }
+    };
+    load();
+  }, [section]);
+
+  // Load personal profile
+  useEffect(() => {
+    if (section !== 'profile') return;
+    const load = async () => {
+      setLoadingProfile(true);
+      try {
+        const res = await dashboardService.getProfile();
+        setProfile(res.data.data);
+      } catch (e) {
+        console.error('Failed to load profile', e);
+      } finally {
+        setLoadingProfile(false);
+      }
+    };
+    load();
+  }, [section]);
+
+  const handleStatusChange = (status) => {
+    setTicketStatus(status);
+    setTicketPage(1);
+  };
+
+  const handlePriorityChange = (priority) => {
+    setTicketPriority(priority);
+    setTicketPage(1);
+  };
+
+  const handleAssignedToChange = (assignedTo) => {
+    setTicketAssignedTo(assignedTo);
+    setTicketPage(1);
+  };
+
+  const handleAssigned = (ticket, engineerName) => {
+    setToast({
+      message: `Ticket ${ticket.number} successfully assigned to ${engineerName}`,
+      variant: 'success'
+    });
+    loadTickets();
+    refreshMetrics();
+  };
+
+  const handleEscalated = (ticket) => {
+    setToast({
+      message: `Ticket ${ticket.number} successfully escalated to Critical!`,
+      variant: 'success'
+    });
+    loadTickets();
+    refreshMetrics();
+  };
+
+  const renderContent = () => {
+    switch (section) {
+      case 'overview':
+        return (
+          <div className="space-y-8">
+            <TeamLeadSummaryCards data={summary} loading={loadingSummary} />
+            
+            <div className="grid grid-cols-1 lg:grid-cols-10 gap-6">
+              <div className="lg:col-span-6 flex">
+                <TeamWorkloadPanel workload={workload} loading={loadingWorkload} />
+              </div>
+              <div className="lg:col-span-4 flex">
+                <SLACompliancePanel slaData={slaData} loading={loadingSLA} />
+              </div>
+            </div>
+
+            <div>
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="font-heading font-bold text-lg text-slate-800 dark:text-white">Team Tickets Queue</h3>
+              </div>
+              <AllTicketsTable
+                tickets={tickets}
+                totalCount={totalTicketCount}
+                pageNumber={ticketPage}
+                pageSize={PAGE_SIZE}
+                activeStatus={ticketStatus}
+                activePriority={ticketPriority}
+                activeAssignedTo={ticketAssignedTo}
+                engineers={engineers}
+                onStatusChange={handleStatusChange}
+                onPriorityChange={handlePriorityChange}
+                onAssignedToChange={handleAssignedToChange}
+                onPageChange={setTicketPage}
+                onTicketClick={setSelectedTicketId}
+                onAssignClick={setAssigningTicket}
+                onEscalateClick={setEscalatingTicket}
+                loading={loadingTickets}
+              />
+            </div>
+          </div>
+        );
+      case 'tickets':
+        return (
+          <div className="space-y-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-heading font-bold text-lg text-slate-800 dark:text-white">All Tickets</h3>
+            </div>
+            <AllTicketsTable
+              tickets={tickets}
+              totalCount={totalTicketCount}
+              pageNumber={ticketPage}
+              pageSize={PAGE_SIZE}
+              activeStatus={ticketStatus}
+              activePriority={ticketPriority}
+              activeAssignedTo={ticketAssignedTo}
+              engineers={engineers}
+              onStatusChange={handleStatusChange}
+              onPriorityChange={handlePriorityChange}
+              onAssignedToChange={handleAssignedToChange}
+              onPageChange={setTicketPage}
+              onTicketClick={setSelectedTicketId}
+              onAssignClick={setAssigningTicket}
+              onEscalateClick={setEscalatingTicket}
+              loading={loadingTickets}
+            />
+          </div>
+        );
+      case 'assets':
+        return <MyAssetsPanel assets={assets} loading={loadingAssets} />;
+      case 'profile':
+        return <EmployeeProfileCard profile={profile} loading={loadingProfile} />;
+      case 'settings':
+        return (
+          <div className="bg-white dark:bg-slate-900 p-6 rounded-xl border border-slate-200/50 dark:border-slate-800/60 shadow-sm">
+            <h3 className="font-heading font-bold text-lg text-slate-800 dark:text-white mb-4">
+              System Settings
+            </h3>
+            <p className="text-sm text-slate-650 dark:text-slate-400 mb-6">
+              Manage system configurations, roles, and integration settings.
+            </p>
+            <div className="border border-dashed border-slate-200 dark:border-slate-700 rounded-lg p-12 text-center text-slate-400">
+              Settings and system administration configuration options will be loaded here.
+            </div>
+          </div>
+        );
+      default:
+        return null;
+    }
+  };
+
   return (
-    <DashboardLayout title="Team Operations Overview" roleBadgeColor="bg-purple-100 text-purple-700 dark:bg-purple-950/30 dark:text-purple-400">
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-        <div className="bg-white dark:bg-slate-900 p-6 rounded-xl border border-slate-200/50 dark:border-slate-800/60 shadow-sm">
-          <div className="text-slate-400 dark:text-slate-500 mb-2 font-bold text-xs uppercase tracking-wider">Team SLA Compliance</div>
-          <div className="text-3xl font-extrabold text-purple-600">97.8%</div>
-        </div>
-        <div className="bg-white dark:bg-slate-900 p-6 rounded-xl border border-slate-200/50 dark:border-slate-800/60 shadow-sm">
-          <div className="text-slate-400 dark:text-slate-500 mb-2 font-bold text-xs uppercase tracking-wider">Pending Purchase approvals</div>
-          <div className="text-3xl font-extrabold text-slate-800 dark:text-white">4 Requests</div>
-        </div>
-        <div className="bg-white dark:bg-slate-900 p-6 rounded-xl border border-slate-200/50 dark:border-slate-800/60 shadow-sm">
-          <div className="text-slate-400 dark:text-slate-500 mb-2 font-bold text-xs uppercase tracking-wider">Active Team members</div>
-          <div className="text-3xl font-extrabold text-slate-800 dark:text-white">8 Online</div>
-        </div>
-      </div>
+    <DashboardLayout
+      title={title}
+      roleBadgeColor={roleBadgeColor}
+      activeSection={section}
+      onSectionChange={setSection}
+    >
+      {renderContent()}
 
-      <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200/50 dark:border-slate-800/60 p-6 shadow-sm">
-        <h3 className="font-heading font-bold text-lg text-slate-800 dark:text-white mb-6">Pending Purchase / Asset Approvals</h3>
-        <div className="space-y-4">
-          <div className="flex justify-between items-center py-3 border-b border-slate-100 dark:border-slate-800">
-            <div>
-              <p className="font-semibold text-sm text-slate-800 dark:text-slate-200">Developer Laptop Upgrade (Requesting $2,499 MacBook Pro)</p>
-              <span className="text-xs text-slate-400">Requested by: Sarah Connor &bull; Department: Engineering</span>
-            </div>
-            <button className="px-3 py-1 bg-purple-600 text-white rounded hover:bg-purple-700 text-xs font-bold transition-all">
-              Review
-            </button>
-          </div>
-          <div className="flex justify-between items-center py-3">
-            <div>
-              <p className="font-semibold text-sm text-slate-800 dark:text-slate-200">Adobe Creative Cloud Suite License renewal</p>
-              <span className="text-xs text-slate-400">Requested by: David Miller &bull; Department: Design</span>
-            </div>
-            <button className="px-3 py-1 bg-purple-600 text-white rounded hover:bg-purple-700 text-xs font-bold transition-all">
-              Review
-            </button>
-          </div>
-        </div>
-      </div>
+      {/* Detail Modal */}
+      {selectedTicketId && (
+        <TicketDetailModal
+          ticketId={selectedTicketId}
+          onClose={() => setSelectedTicketId(null)}
+          onFeedbackSubmitted={() => {
+            loadTickets();
+            refreshMetrics();
+          }}
+        />
+      )}
+
+      {/* Assign Modal */}
+      {assigningTicket && (
+        <AssignTicketModal
+          ticket={assigningTicket}
+          engineers={engineers}
+          loadingEngineers={loadingEngineers}
+          onClose={() => setAssigningTicket(null)}
+          onAssigned={handleAssigned}
+        />
+      )}
+
+      {/* Escalate Modal */}
+      {escalatingTicket && (
+        <EscalateTicketModal
+          ticket={escalatingTicket}
+          onClose={() => setEscalatingTicket(null)}
+          onEscalated={handleEscalated}
+        />
+      )}
+
+      {/* Toast Notification */}
+      {toast && (
+        <Toast
+          message={toast.message}
+          variant={toast.variant}
+          onClose={() => setToast(null)}
+        />
+      )}
     </DashboardLayout>
   );
 };
@@ -263,51 +734,10 @@ export const TeamLeadDashboard = () => {
 /* 4. Administrator Dashboard */
 export const AdminDashboard = () => {
   return (
-    <DashboardLayout title="System Administration console" roleBadgeColor="bg-red-100 text-red-700 dark:bg-red-950/30 dark:text-red-400">
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
-        <div className="bg-white dark:bg-slate-900 p-6 rounded-xl border border-slate-200/50 dark:border-slate-800/60 shadow-sm">
-          <div className="text-slate-400 dark:text-slate-500 mb-2 font-bold text-xs uppercase tracking-wider">Total Users</div>
-          <div className="text-3xl font-extrabold text-slate-800 dark:text-white">1,429</div>
-        </div>
-        <div className="bg-white dark:bg-slate-900 p-6 rounded-xl border border-slate-200/50 dark:border-slate-800/60 shadow-sm">
-          <div className="text-slate-400 dark:text-slate-500 mb-2 font-bold text-xs uppercase tracking-wider">Registered Assets</div>
-          <div className="text-3xl font-extrabold text-slate-800 dark:text-white">3,104</div>
-        </div>
-        <div className="bg-white dark:bg-slate-900 p-6 rounded-xl border border-slate-200/50 dark:border-slate-800/60 shadow-sm">
-          <div className="text-slate-400 dark:text-slate-500 mb-2 font-bold text-xs uppercase tracking-wider">Azure Sync Status</div>
-          <div className="text-sm font-semibold text-emerald-500 flex items-center gap-1 mt-2">
-            <ShieldCheck size={16} /> Sync Successful (15m ago)
-          </div>
-        </div>
-        <div className="bg-white dark:bg-slate-900 p-6 rounded-xl border border-slate-200/50 dark:border-slate-800/60 shadow-sm">
-          <div className="text-slate-400 dark:text-slate-500 mb-2 font-bold text-xs uppercase tracking-wider">Active Servers</div>
-          <div className="text-3xl font-extrabold text-emerald-500">4 / 4</div>
-        </div>
-      </div>
-
-      <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200/50 dark:border-slate-800/60 p-6 shadow-sm mb-6">
-        <h3 className="font-heading font-bold text-lg text-slate-800 dark:text-white mb-6">Azure AD Integration Logs</h3>
-        <div className="space-y-4">
-          <div className="flex justify-between items-center py-3 border-b border-slate-100 dark:border-slate-800">
-            <div>
-              <p className="font-semibold text-sm text-slate-850 dark:text-slate-250">SSO configuration checked</p>
-              <span className="text-xs text-slate-400">Endpoint: https://login.microsoftonline.com/common</span>
-            </div>
-            <span className="px-2 py-0.5 rounded bg-green-100 text-green-700 dark:bg-green-950/20 dark:text-green-400 text-xs font-semibold">
-              SUCCESS
-            </span>
-          </div>
-          <div className="flex justify-between items-center py-3">
-            <div>
-              <p className="font-semibold text-sm text-slate-850 dark:text-slate-250">Security Audit logs uploaded</p>
-              <span className="text-xs text-slate-400">Target: Azure Log Analytics workspace</span>
-            </div>
-            <span className="px-2 py-0.5 rounded bg-green-100 text-green-700 dark:bg-green-950/20 dark:text-green-400 text-xs font-semibold">
-              SUCCESS
-            </span>
-          </div>
-        </div>
-      </div>
-    </DashboardLayout>
+    <TeamLeadDashboard 
+      title="System Administration console" 
+      roleBadgeColor="bg-red-100 text-red-750 dark:bg-red-950/30 dark:text-red-400" 
+    />
   );
 };
+
