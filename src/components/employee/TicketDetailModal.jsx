@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { X, AlertTriangle, Star, Paperclip, MessageSquare, Clock } from 'lucide-react';
-import dashboardService from '../../services/dashboardService';
+import dashboardService, { teamLeadService, adminService } from '../../services/dashboardService';
+import { authService } from '../../services/authService';
 
 const statusBadge = (status) => {
   const map = {
@@ -35,7 +36,16 @@ const TicketDetailModal = ({ ticketId, onClose, onFeedbackSubmitted }) => {
   useEffect(() => {
     const load = async () => {
       try {
-        const res = await dashboardService.getTicketDetail(ticketId);
+        const user = authService.getCurrentUser();
+        let res;
+        if (user?.role === 'Administrator') {
+          res = await adminService.getTicketDetail(ticketId);
+        } else if (user?.role === 'Team Lead') {
+          res = await teamLeadService.getTicketDetail(ticketId);
+        } else {
+          res = await dashboardService.getTicketDetail(ticketId);
+        }
+          
         setTicket(res.data.data);
       } catch (e) {
         console.error('Failed to load ticket detail', e);
@@ -72,7 +82,10 @@ const TicketDetailModal = ({ ticketId, onClose, onFeedbackSubmitted }) => {
     }
   };
 
+  const user = authService.getCurrentUser();
+  const isEmployee = user && user.role === 'Employee';
   const canShowFeedback =
+    isEmployee &&
     ticket &&
     (ticket.status === 'Resolved' || ticket.status === 'Closed') &&
     ticket.feedbackRating == null;
@@ -156,21 +169,23 @@ const TicketDetailModal = ({ ticketId, onClose, onFeedbackSubmitted }) => {
             </div>
 
             {/* Comments */}
-            {ticket.comments?.length > 0 && (
+            {ticket.comments?.filter((c) => !c.isInternal || !isEmployee).length > 0 && (
               <div>
                 <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-3 flex items-center gap-1.5">
-                  <MessageSquare size={14} /> Comments ({ticket.comments.length})
+                  <MessageSquare size={14} /> Comments ({ticket.comments.filter((c) => !c.isInternal || !isEmployee).length})
                 </h4>
                 <div className="space-y-3">
                   {ticket.comments
-                    .filter((c) => !c.isInternal)
+                    .filter((c) => !c.isInternal || !isEmployee)
                     .map((c) => (
-                      <div key={c.id} className="bg-slate-50 dark:bg-slate-800/50 rounded-lg p-3">
+                      <div key={c.id} className={`rounded-lg p-3 ${c.isInternal ? 'bg-amber-50 dark:bg-amber-950/20 border border-amber-150 dark:border-amber-900/30' : 'bg-slate-50 dark:bg-slate-800/50'}`}>
                         <div className="flex items-center justify-between mb-1">
-                          <span className="text-xs font-semibold text-slate-700 dark:text-slate-300">{c.commentedByName}</span>
+                          <span className="text-xs font-semibold text-slate-700 dark:text-slate-300">
+                            {c.commentedByName} {c.isInternal && <span className="ml-1.5 px-1.5 py-0.5 bg-amber-100 text-amber-800 dark:bg-amber-900/50 dark:text-amber-300 text-[9px] font-bold uppercase rounded">Internal</span>}
+                          </span>
                           <span className="text-xs text-slate-400">{new Date(c.commentedAt).toLocaleString()}</span>
                         </div>
-                        <p className="text-sm text-slate-600 dark:text-slate-400">{c.commentText}</p>
+                        <p className="text-sm text-slate-650 dark:text-slate-400">{c.commentText}</p>
                       </div>
                     ))}
                 </div>
