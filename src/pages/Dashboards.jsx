@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useLocation, Link } from 'react-router-dom';
 import { authService } from '../services/authService';
-import dashboardService, { teamLeadService } from '../services/dashboardService';
+import dashboardService, { teamLeadService, adminService } from '../services/dashboardService';
 import { 
   LogOut, 
   User, 
@@ -14,7 +14,8 @@ import {
   TrendingUp, 
   Layers, 
   Settings, 
-  Briefcase 
+  Briefcase,
+  Clock
 } from 'lucide-react';
 
 // Employee-specific components
@@ -33,6 +34,15 @@ import AssignTicketModal from '../components/teamlead/AssignTicketModal';
 import EscalateTicketModal from '../components/teamlead/EscalateTicketModal';
 import TeamWorkloadPanel from '../components/teamlead/TeamWorkloadPanel';
 import SLACompliancePanel from '../components/teamlead/SLACompliancePanel';
+
+// Admin-specific components
+import AdminSummaryCards from '../components/admin/AdminSummaryCards';
+import UserManagement from '../components/admin/UserManagement';
+import RolesPermissions from '../components/admin/RolesPermissions';
+import CategoryManagement from '../components/admin/CategoryManagement';
+import SLAConfiguration from '../components/admin/SLAConfiguration';
+import AssetRequestsAdmin from '../components/admin/AssetRequestsAdmin';
+import EmailConfiguration from '../components/admin/EmailConfiguration';
 
 /**
  * Shared layout wrapper for dashboards
@@ -733,11 +743,306 @@ export const TeamLeadDashboard = ({
 
 /* 4. Administrator Dashboard */
 export const AdminDashboard = () => {
+  const [section, setSection] = useState('overview');
+  const [summary, setSummary] = useState(null);
+  const [loadingSummary, setLoadingSummary] = useState(true);
+  
+  // Overview tickets queue (reused Team Lead's tickets)
+  const [tickets, setTickets] = useState([]);
+  const [totalTicketCount, setTotalTicketCount] = useState(0);
+  const [ticketPage, setTicketPage] = useState(1);
+  const [ticketStatus, setTicketStatus] = useState(null);
+  const [ticketPriority, setTicketPriority] = useState(null);
+  const [ticketAssignedTo, setTicketAssignedTo] = useState(null);
+  const [engineers, setEngineers] = useState([]);
+  const [loadingTickets, setLoadingTickets] = useState(true);
+  const [loadingEngineers, setLoadingEngineers] = useState(true);
+  
+  // Modals
+  const [selectedTicketId, setSelectedTicketId] = useState(null);
+  const [assigningTicket, setAssigningTicket] = useState(null);
+  const [escalatingTicket, setEscalatingTicket] = useState(null);
+  const [toast, setToast] = useState(null);
+
+  const PAGE_SIZE = 10;
+
+  // Load summary and overview tickets
+  const loadOverviewData = async () => {
+    if (section !== 'overview') return;
+    setLoadingSummary(true);
+    setLoadingTickets(true);
+    try {
+      const [summaryRes, ticketsRes, engineersRes] = await Promise.all([
+        adminService.getSummary(),
+        teamLeadService.getTickets({
+          status: ticketStatus || undefined,
+          priority: ticketPriority || undefined,
+          assignedTo: ticketAssignedTo || undefined,
+          pageNumber: ticketPage,
+          pageSize: PAGE_SIZE
+        }),
+        teamLeadService.getEngineers()
+      ]);
+      setSummary(summaryRes.data.data);
+      const ticketData = ticketsRes.data.data;
+      setTickets(ticketData.items || []);
+      setTotalTicketCount(ticketData.totalCount || 0);
+      setEngineers(engineersRes.data.data || []);
+    } catch (e) {
+      console.error('Failed to load Overview data', e);
+    } finally {
+      setLoadingSummary(false);
+      setLoadingTickets(false);
+      setLoadingEngineers(false);
+    }
+  };
+
+  const loadTicketsOnly = async () => {
+    if (section !== 'overview') return;
+    setLoadingTickets(true);
+    try {
+      const res = await teamLeadService.getTickets({
+        status: ticketStatus || undefined,
+        priority: ticketPriority || undefined,
+        assignedTo: ticketAssignedTo || undefined,
+        pageNumber: ticketPage,
+        pageSize: PAGE_SIZE
+      });
+      setTickets(res.data.data?.items || []);
+      setTotalTicketCount(res.data.data?.totalCount || 0);
+    } catch (e) {
+      console.error('Failed to reload tickets', e);
+    } finally {
+      setLoadingTickets(false);
+    }
+  };
+
+  useEffect(() => {
+    loadOverviewData();
+  }, [section]);
+
+  useEffect(() => {
+    if (section === 'overview') {
+      loadTicketsOnly();
+    }
+  }, [ticketStatus, ticketPriority, ticketAssignedTo, ticketPage]);
+
+  const handleStatusChange = (status) => {
+    setTicketStatus(status);
+    setTicketPage(1);
+  };
+
+  const handlePriorityChange = (priority) => {
+    setTicketPriority(priority);
+    setTicketPage(1);
+  };
+
+  const handleAssignedToChange = (assignedTo) => {
+    setTicketAssignedTo(assignedTo);
+    setTicketPage(1);
+  };
+
+  const handleAssigned = async (ticket, engineerName) => {
+    setToast({
+      message: `Ticket ${ticket.number} successfully assigned to ${engineerName}`,
+      variant: 'success'
+    });
+    loadTicketsOnly();
+  };
+
+  const handleEscalated = async (ticket) => {
+    setToast({
+      message: `Ticket ${ticket.number} successfully escalated to Critical!`,
+      variant: 'success'
+    });
+    loadTicketsOnly();
+  };
+
+  // Sidebar navigation items for Admin
+  const navItems = [
+    { id: 'overview', label: 'Overview', icon: Activity },
+    { id: 'users', label: 'User Management', icon: User },
+    { id: 'roles', label: 'Roles & Permissions', icon: ShieldCheck },
+    { id: 'categories', label: 'Category Management', icon: Layers },
+    { id: 'sla', label: 'SLA Configuration', icon: Clock },
+    { id: 'asset-requests', label: 'Asset Requests', icon: Briefcase },
+    { id: 'email-config', label: 'Email Configuration', icon: Settings }
+  ];
+
+  const handleLogout = () => {
+    authService.logout();
+    window.location.href = '/login';
+  };
+
+  const user = authService.getCurrentUser() || { name: 'Admin', email: 'admin@company.com', role: 'Administrator' };
+
+  const renderContent = () => {
+    switch (section) {
+      case 'overview':
+        return (
+          <div className="space-y-6">
+            <AdminSummaryCards data={summary} loading={loadingSummary} />
+            <div className="bg-white dark:bg-slate-900 p-6 rounded-xl border border-slate-200/50 dark:border-slate-800/60 shadow-sm">
+              <h4 className="font-heading font-bold text-base text-slate-800 dark:text-white mb-6">
+                Active Tickets Queue
+              </h4>
+              <AllTicketsTable
+                tickets={tickets}
+                totalCount={totalTicketCount}
+                pageNumber={ticketPage}
+                pageSize={PAGE_SIZE}
+                activeStatus={ticketStatus}
+                activePriority={ticketPriority}
+                activeAssignedTo={ticketAssignedTo}
+                engineers={engineers}
+                onStatusChange={handleStatusChange}
+                onPriorityChange={handlePriorityChange}
+                onAssignedToChange={handleAssignedToChange}
+                onPageChange={setTicketPage}
+                onTicketClick={setSelectedTicketId}
+                onAssignClick={setAssigningTicket}
+                onEscalateClick={setEscalatingTicket}
+                loading={loadingTickets}
+              />
+            </div>
+          </div>
+        );
+      case 'users':
+        return <UserManagement setToast={setToast} />;
+      case 'roles':
+        return <RolesPermissions setToast={setToast} />;
+      case 'categories':
+        return <CategoryManagement setToast={setToast} />;
+      case 'sla':
+        return <SLAConfiguration setToast={setToast} />;
+      case 'asset-requests':
+        return <AssetRequestsAdmin setToast={setToast} />;
+      case 'email-config':
+        return <EmailConfiguration setToast={setToast} />;
+      default:
+        return null;
+    }
+  };
+
   return (
-    <TeamLeadDashboard 
-      title="System Administration console" 
-      roleBadgeColor="bg-red-100 text-red-750 dark:bg-red-950/30 dark:text-red-400" 
-    />
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex flex-col md:flex-row transition-colors duration-300">
+      
+      {/* Sidebar navigation */}
+      <aside className="w-full md:w-64 bg-slate-900 text-slate-100 flex-shrink-0 flex flex-col justify-between p-6">
+        <div>
+          <div className="flex items-center gap-3 mb-8">
+            <div className="w-10 h-10 rounded-lg bg-blue-500 flex items-center justify-center text-white font-bold text-lg">
+              IT
+            </div>
+            <div>
+              <h2 className="font-heading font-bold text-base tracking-tight leading-tight">IT Manager</h2>
+              <p className="text-[10px] text-slate-400 font-semibold uppercase tracking-wider">Administration</p>
+            </div>
+          </div>
+
+          <nav className="space-y-1">
+            {navItems.map((item) => {
+              const Icon = item.icon;
+              const isActive = section === item.id;
+              return (
+                <button
+                  key={item.id}
+                  onClick={() => setSection(item.id)}
+                  className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-lg font-medium text-sm transition-all text-left ${
+                    isActive
+                      ? 'bg-slate-800 text-white'
+                      : 'text-slate-400 hover:bg-slate-800 hover:text-white'
+                  }`}
+                >
+                  <Icon size={18} />
+                  <span>{item.label}</span>
+                </button>
+              );
+            })}
+          </nav>
+        </div>
+
+        {/* User profile footer */}
+        <div className="mt-8 pt-6 border-t border-slate-800">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="w-10 h-10 rounded-full bg-slate-700 flex items-center justify-center text-slate-200">
+              <User size={20} />
+            </div>
+            <div className="overflow-hidden">
+              <h4 className="text-sm font-semibold truncate text-white">{user.name}</h4>
+              <p className="text-xs text-slate-400 truncate">{user.email}</p>
+            </div>
+          </div>
+          <button 
+            onClick={handleLogout}
+            className="w-full flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-red-650/10 text-red-400 border border-red-900/30 hover:bg-red-500 hover:text-white transition-all text-sm font-medium"
+          >
+            <LogOut size={16} />
+            <span>Sign Out</span>
+          </button>
+        </div>
+      </aside>
+
+      {/* Main dashboard content area */}
+      <main className="flex-1 p-6 md:p-10 overflow-y-auto">
+        <header className="flex flex-col sm:flex-row justify-between sm:items-center gap-4 mb-8">
+          <div>
+            <div className="flex items-center gap-2.5 mb-1.5">
+              <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-red-100 text-red-750 dark:bg-red-950/30 dark:text-red-400">
+                {user.role}
+              </span>
+            </div>
+            <h1 className="font-heading text-2xl md:text-3xl font-extrabold text-slate-800 dark:text-white tracking-tight">
+              System Administration console
+            </h1>
+          </div>
+          
+          <div className="text-sm text-slate-500 dark:text-slate-400">
+            System status: <span className="font-semibold text-emerald-500">Operational</span>
+          </div>
+        </header>
+
+        {renderContent()}
+
+        {/* Detail Modal */}
+        {selectedTicketId && (
+          <TicketDetailModal
+            ticketId={selectedTicketId}
+            onClose={() => setSelectedTicketId(null)}
+          />
+        )}
+
+        {/* Assign Modal */}
+        {assigningTicket && (
+          <AssignTicketModal
+            ticket={assigningTicket}
+            engineers={engineers}
+            loadingEngineers={loadingEngineers}
+            onClose={() => setAssigningTicket(null)}
+            onAssigned={handleAssigned}
+          />
+        )}
+
+        {/* Escalate Modal */}
+        {escalatingTicket && (
+          <EscalateTicketModal
+            ticket={escalatingTicket}
+            onClose={() => setEscalatingTicket(null)}
+            onEscalated={handleEscalated}
+          />
+        )}
+
+        {/* Toast Notification */}
+        {toast && (
+          <Toast
+            message={toast.message}
+            variant={toast.variant}
+            onClose={() => setToast(null)}
+          />
+        )}
+      </main>
+
+    </div>
   );
 };
 
